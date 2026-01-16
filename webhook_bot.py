@@ -9,7 +9,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiohttp import web
 
 from config import Config
@@ -127,28 +126,20 @@ class TradingBot:
         self.sheets = SheetsManager()
         self.gemini = GeminiExtractor()
         self.risk_mgr = RiskManager()
-        self.app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
-        self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("stats", self.stats_command))
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_trade_message))
+        self.application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         
-        self.setup_cron_jobs()
+        self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("stats", self.stats_command))
+        self.application.add_handler(CommandHandler("daily", self.daily_command))
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_trade_message))
+        
         print("✅ Bot initialized")
-    
-    def setup_cron_jobs(self):
-        self.scheduler = AsyncIOScheduler(timezone='Asia/Kolkata')
-        
-        @self.scheduler.scheduled_job('cron', hour=18, minute=0)
-        async def daily_summary():
-            print(f"📊 Daily Summary: ₹{self.sheets.get_today_pnl():.2f}")
-        
-        self.scheduler.start()
-        print("⏰ Cron jobs scheduled (6 PM daily summary)")
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "🤖 *AI Trading Tracker*\n\nSend: `Bought 100 Suzlon at 40, sold at 42`\n\n/stats - Performance",
+            "🤖 *AI Trading Tracker*\n\nSend: `Bought 100 Suzlon at 40, sold at 42`\n\n"
+            "/stats - Today's performance\n/daily - Daily summary",
             parse_mode='Markdown'
         )
     
@@ -170,6 +161,7 @@ class TradingBot:
                 await update.message.reply_text("🚫 *BLOCKED*\n\n" + "\n".join(risk_check['warnings']), parse_mode='Markdown')
         except Exception as e:
             await update.message.reply_text(f"❌ Error: {e}")
+            print(f"Error: {e}")
     
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         today_pnl = self.sheets.get_today_pnl()
@@ -179,33 +171,59 @@ class TradingBot:
             parse_mode='Markdown'
         )
     
+    async def daily_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        today_pnl = self.sheets.get_today_pnl()
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        try:
+            all_records = self.sheets.journal.get_all_records()
+            today_trades = [r for r in all_records if r.get('Date') == today]
+            
+            wins = sum(1 for t in today_trades if float(t.get('P&L', 0) or 0) > 0)
+            losses = sum(1 for t in today_trades if float(t.get('P&L', 0) or 0) < 0)
+            win_rate = (wins / len(today_trades) * 100) if today_trades else 0
+            
+            response = f"""📊 *Daily Summary*
+
+💰 Total P&L: ₹{today_pnl:.2f}
+📈 Trades: {len(today_trades)}
+✅ Wins: {wins}
+❌ Losses: {losses}
+📊 Win Rate: {win_rate:.1f}%
+🛡️ Buffer: ₹{Config.MAX_LOSS_PER_DAY + today_pnl:.2f}"""
+        except Exception as e:
+            response = f"📊 *Daily Summary*\n\n💰 Total P&L: ₹{today_pnl:.2f}"
+            print(f"Daily summary error: {e}")
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+    
     async def health_check(self, request):
         return web.Response(text="Bot is running!")
     
     async def handle_webhook(self, request):
         try:
             data = await request.json()
-            update = Update.de_json(data, self.app.bot)
-            await self.app.process_update(update)
+            update = Update.de_json(data, self.application.bot)
+            await self.application.process_update(update)
             return web.Response(text="OK")
         except Exception as e:
             print(f"Webhook error: {e}")
-            return web.Response(status=500)
+            return web.Response(status=500, text=str(e))
     
     async def run(self):
-        await self.app.initialize()
-        await self.app.start()
+        await self.application.initialize()
+        await self.application.start()
         
-        webhook_url = os.getenv('RENDER_EXTERNAL_URL', 'https://your-app.onrender.com') + '/webhook'
-        await self.app.bot.set_webhook(webhook_url)
+        webhook_url = os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:10000') + '/webhook'
+        await self.application.bot.set_webhook(webhook_url)
         print(f"🌐 Webhook: {webhook_url}")
         
-        web_app = web.Application()
-        web_app.router.add_post('/webhook', self.handle_webhook)
-        web_app.router.add_get('/', self.health_check)
-        web_app.router.add_get('/health', self.health_check)
+        app = web.Application()
+        app.router.add_post('/webhook', self.handle_webhook)
+        app.router.add_get('/', self.health_check)
+        app.router.add_get('/health', self.health_check)
         
-        runner = web.AppRunner(web_app)
+        runner = web.AppRunner(app)
         await runner.setup()
         
         port = int(os.getenv('PORT', 10000))
@@ -213,6 +231,8 @@ class TradingBot:
         await site.start()
         
         print(f"🚀 Running on port {port}")
+        print("📱 Ready to receive updates!")
+        
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
@@ -223,3 +243,5 @@ if __name__ == "__main__":
         print("\n👋 Stopped")
     except Exception as e:
         print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
