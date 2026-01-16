@@ -13,6 +13,16 @@ from aiohttp import web
 
 from config import Config
 
+# TEMPORARY: List available models
+print("🔍 Checking available models...")
+genai.configure(api_key=Config.GEMINI_API_KEY)
+try:
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            print(f"✅ Available: {m.name}")
+except Exception as e:
+    print(f"❌ Error listing models: {e}")
+
 class SheetsManager:
     def __init__(self):
         scope = [
@@ -59,28 +69,8 @@ class SheetsManager:
 class GeminiExtractor:
     def __init__(self):
         genai.configure(api_key=Config.GEMINI_API_KEY)
-        
-        # Try multiple model names until one works
-        model_names = [
-            'gemini-pro',
-            'models/gemini-1.5-flash-latest',
-            'models/gemini-1.5-pro-latest',
-            'gemini-flash',
-            'models/gemini-pro'
-        ]
-        
-        self.model = None
-        for model_name in model_names:
-            try:
-                self.model = genai.GenerativeModel(model_name)
-                print(f"✅ Using model: {model_name}")
-                break
-            except Exception as e:
-                print(f"❌ {model_name} failed: {e}")
-                continue
-        
-        if not self.model:
-            raise Exception("No working Gemini model found!")
+        # Try this model name
+        self.model = genai.GenerativeModel('gemini-1.5-flash-001')
     
     def extract(self, raw_message: str) -> Dict:
         prompt = f"""Extract trade data. If profit/loss NOT stated, return null.
@@ -92,8 +82,12 @@ Return JSON:
 "buy_price": 100.0, "sell_price": 110.0, "quantity": 100, "capital_invested": 10000,
 "profit_loss": null, "strategy": null, "emotion": null}}"""
 
-        response = self.model.generate_content(prompt)
-        text = response.text.strip()
+        try:
+            response = self.model.generate_content(prompt)
+            text = response.text.strip()
+        except Exception as e:
+            print(f"Gemini API Error: {e}")
+            raise
         
         if '```' in text:
             text = text.split('```')[1]
@@ -122,6 +116,10 @@ Return JSON:
         data.setdefault('instrument_type', 'Equity')
         data.setdefault('trade_direction', 'Long')
         return data
+
+# ... rest of classes remain same
+
+
 
 
 class RiskManager:
