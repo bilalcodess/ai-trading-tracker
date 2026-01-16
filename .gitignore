@@ -1,0 +1,9 @@
+venv/
+.env
+service_account.json
+credentials/
+__pycache__/
+*.pyc
+.vscode/
+*.backup
+*.log
