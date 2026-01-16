@@ -59,48 +59,29 @@ class SheetsManager:
 class GeminiExtractor:
     def __init__(self):
         genai.configure(api_key=Config.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
-    
-    def extract(self, raw_message: str) -> Dict:
-        prompt = f"""Extract trade data. If profit/loss NOT stated, return null.
-TODAY: {datetime.now().strftime('%Y-%m-%d')}
-MESSAGE: "{raw_message}"
+        
+        # Try multiple model names until one works
+        model_names = [
+            'gemini-pro',
+            'models/gemini-1.5-flash-latest',
+            'models/gemini-1.5-pro-latest',
+            'gemini-flash',
+            'models/gemini-pro'
+        ]
+        
+        self.model = None
+        for model_name in model_names:
+            try:
+                self.model = genai.GenerativeModel(model_name)
+                print(f"✅ Using model: {model_name}")
+                break
+            except Exception as e:
+                print(f"❌ {model_name} failed: {e}")
+                continue
+        
+        if not self.model:
+            raise Exception("No working Gemini model found!")
 
-Return JSON:
-{{"symbol": "STOCK", "instrument_type": "Equity", "trade_direction": "Long", 
-"buy_price": 100.0, "sell_price": 110.0, "quantity": 100, "capital_invested": 10000,
-"profit_loss": null, "strategy": null, "emotion": null}}"""
-
-        response = self.model.generate_content(prompt)
-        text = response.text.strip()
-        
-        if '```' in text:
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
-            text = text.strip()
-        
-        data = json.loads(text)
-        if isinstance(data, list):
-            data = data[0]
-        
-        if not data.get('profit_loss'):
-            buy = data.get('buy_price')
-            sell = data.get('sell_price')
-            qty = data.get('quantity')
-            if buy and sell and qty:
-                pnl = (sell - buy) * qty
-                data['profit_loss'] = round(pnl, 2)
-                print(f"💰 Calculated P&L: ₹{pnl}")
-            else:
-                data['profit_loss'] = 0
-        
-        data['date'] = datetime.now().strftime('%Y-%m-%d')
-        data['raw_message'] = raw_message
-        data.setdefault('symbol', 'UNKNOWN')
-        data.setdefault('instrument_type', 'Equity')
-        data.setdefault('trade_direction', 'Long')
-        return data
 
 class RiskManager:
     @staticmethod
