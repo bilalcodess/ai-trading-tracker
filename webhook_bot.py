@@ -69,8 +69,9 @@ class SheetsManager:
 class GeminiExtractor:
     def __init__(self):
         genai.configure(api_key=Config.GEMINI_API_KEY)
-        # Try this model name
-        self.model = genai.GenerativeModel('gemini-1.5-flash-001')
+        # For v1beta API, use this old model name:
+        self.model = genai.GenerativeModel('models/gemini-1.0-pro')
+
     
     def extract(self, raw_message: str) -> Dict:
         prompt = f"""Extract trade data. If profit/loss NOT stated, return null.
