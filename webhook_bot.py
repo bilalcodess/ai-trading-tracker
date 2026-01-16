@@ -81,6 +81,47 @@ class GeminiExtractor:
         
         if not self.model:
             raise Exception("No working Gemini model found!")
+    
+    def extract(self, raw_message: str) -> Dict:
+        prompt = f"""Extract trade data. If profit/loss NOT stated, return null.
+TODAY: {datetime.now().strftime('%Y-%m-%d')}
+MESSAGE: "{raw_message}"
+
+Return JSON:
+{{"symbol": "STOCK", "instrument_type": "Equity", "trade_direction": "Long", 
+"buy_price": 100.0, "sell_price": 110.0, "quantity": 100, "capital_invested": 10000,
+"profit_loss": null, "strategy": null, "emotion": null}}"""
+
+        response = self.model.generate_content(prompt)
+        text = response.text.strip()
+        
+        if '```' in text:
+            text = text.split('```')[1]
+            if text.startswith('json'):
+                text = text[4:]
+            text = text.strip()
+        
+        data = json.loads(text)
+        if isinstance(data, list):
+            data = data[0]
+        
+        if not data.get('profit_loss'):
+            buy = data.get('buy_price')
+            sell = data.get('sell_price')
+            qty = data.get('quantity')
+            if buy and sell and qty:
+                pnl = (sell - buy) * qty
+                data['profit_loss'] = round(pnl, 2)
+                print(f"💰 Calculated P&L: ₹{pnl}")
+            else:
+                data['profit_loss'] = 0
+        
+        data['date'] = datetime.now().strftime('%Y-%m-%d')
+        data['raw_message'] = raw_message
+        data.setdefault('symbol', 'UNKNOWN')
+        data.setdefault('instrument_type', 'Equity')
+        data.setdefault('trade_direction', 'Long')
+        return data
 
 
 class RiskManager:
