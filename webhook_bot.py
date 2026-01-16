@@ -6,22 +6,12 @@ import asyncio
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+from google import genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from aiohttp import web
 
 from config import Config
-
-# TEMPORARY: List available models
-print("🔍 Checking available models...")
-genai.configure(api_key=Config.GEMINI_API_KEY)
-try:
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            print(f"✅ Available: {m.name}")
-except Exception as e:
-    print(f"❌ Error listing models: {e}")
 
 class SheetsManager:
     def __init__(self):
@@ -68,10 +58,9 @@ class SheetsManager:
 
 class GeminiExtractor:
     def __init__(self):
-        genai.configure(api_key=Config.GEMINI_API_KEY)
-        # For v1beta API, use this old model name:
-        self.model = genai.GenerativeModel('models/gemini-1.0-pro')
-
+        self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
+        self.model_name = 'gemini-2.0-flash-exp'
+        print(f"✅ Using Gemini model: {self.model_name}")
     
     def extract(self, raw_message: str) -> Dict:
         prompt = f"""Extract trade data. If profit/loss NOT stated, return null.
@@ -84,10 +73,13 @@ Return JSON:
 "profit_loss": null, "strategy": null, "emotion": null}}"""
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt
+            )
             text = response.text.strip()
         except Exception as e:
-            print(f"Gemini API Error: {e}")
+            print(f"❌ Gemini API Error: {e}")
             raise
         
         if '```' in text:
@@ -117,6 +109,9 @@ Return JSON:
         data.setdefault('instrument_type', 'Equity')
         data.setdefault('trade_direction', 'Long')
         return data
+
+# ... RiskManager and TradingBot classes remain the same
+
 
 # ... rest of classes remain same
 
