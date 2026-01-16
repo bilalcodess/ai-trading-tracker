@@ -59,56 +59,120 @@ class SheetsManager:
 class GeminiExtractor:
     def __init__(self):
         self.client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        self.model_name = 'gemini-2.0-flash-exp'
-        print(f"✅ Using Gemini model: {self.model_name}")
+        self.model = 'gemini-2.5-flash'
+        print(f"✅ Gemini Extractor initialized with model: {self.model}")
+    
+    def clean_json_response(self, text: str) -> str:
+        """Clean and extract JSON from Gemini response"""
+        import re
+        
+        # Remove markdown code blocks
+        if '```' in text:
+            parts = text.split('```')
+            for part in parts:
+                part = part.strip()
+                if part.startswith('json'):
+                    text = part[4:].strip()
+                    break
+                elif part.startswith('{'):
+                    text = part.strip()
+                    break
+        
+        # Find complete JSON object using brace counting
+        brace_count = 0
+        start_idx = text.find('{')
+        if start_idx == -1:
+            return text
+        
+        end_idx = -1
+        for i in range(start_idx, len(text)):
+            if text[i] == '{':
+                brace_count += 1
+            elif text[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_idx = i + 1
+                    break
+        
+        if end_idx > start_idx:
+            text = text[start_idx:end_idx]
+        
+        # Remove trailing commas
+        text = re.sub(r',(\s*[}\]])', r'\1', text)
+        
+        return text
     
     def extract(self, raw_message: str) -> Dict:
-        prompt = f"""Extract trade data. If profit/loss NOT stated, return null.
-TODAY: {datetime.now().strftime('%Y-%m-%d')}
-MESSAGE: "{raw_message}"
+        prompt = f"""Extract this trade info as JSON:
+Message: "{raw_message}"
+Date: {datetime.now().strftime('%Y-%m-%d')}
 
-Return JSON:
-{{"symbol": "STOCK", "instrument_type": "Equity", "trade_direction": "Long", 
-"buy_price": 100.0, "sell_price": 110.0, "quantity": 100, "capital_invested": 10000,
-"profit_loss": null, "strategy": null, "emotion": null}}"""
+Rules:
+- If profit/loss explicitly stated, use it. Otherwise set to null.
+- For Short trades: buy_price is cover price, sell_price is short price
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
-            text = response.text.strip()
-        except Exception as e:
-            print(f"❌ Gemini API Error: {e}")
-            raise
-        
-        if '```' in text:
-            text = text.split('```')[1]
-            if text.startswith('json'):
-                text = text[4:]
-            text = text.strip()
-        
-        data = json.loads(text)
-        if isinstance(data, list):
-            data = data[0]
-        
-        if not data.get('profit_loss'):
-            buy = data.get('buy_price')
-            sell = data.get('sell_price')
-            qty = data.get('quantity')
-            if buy and sell and qty:
-                pnl = (sell - buy) * qty
-                data['profit_loss'] = round(pnl, 2)
-                print(f"💰 Calculated P&L: ₹{pnl}")
-            else:
-                data['profit_loss'] = 0
-        
-        data['date'] = datetime.now().strftime('%Y-%m-%d')
-        data['raw_message'] = raw_message
-        data.setdefault('symbol', 'UNKNOWN')
-        data.setdefault('instrument_type', 'Equity')
-        data.setdefault('trade_direction', 'Long')
-        return data
+JSON format:
+{{"symbol":"STOCK","instrument_type":"Equity","trade_direction":"Long","buy_price":100.0,"sell_price":110.0,"quantity":100,"capital_invested":10000,"profit_loss":null,"strategy":null,"emotion":null}}
+
+Return ONLY the JSON, no explanation."""
+
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=prompt,
+                    config={
+                        'temperature': 0,
+                        'max_output_tokens': 1000
+                    }
+                )
+                
+                raw_text = response.text.strip()
+                print(f"📤 Gemini raw response: {raw_text[:100]}...")
+                
+                # Clean JSON
+                cleaned = self.clean_json_response(raw_text)
+                print(f"🧹 Cleaned JSON: {cleaned[:100]}...")
+                
+                # Parse JSON
+                data = json.loads(cleaned)
+                
+                # Calculate P&L if not provided
+                if not data.get('profit_loss') or data['profit_loss'] is None:
+                    buy = data.get('buy_price')
+                    sell = data.get('sell_price')
+                    qty = data.get('quantity')
+                    if buy and sell and qty:
+                        if data.get('trade_direction') == 'Short':
+                            pnl = (buy - sell) * qty
+                        else:
+                            pnl = (sell - buy) * qty
+                        data['profit_loss'] = round(pnl, 2)
+                        print(f"💰 Calculated P&L: ₹{pnl}")
+                    else:
+                        data['profit_loss'] = 0
+                
+                # Add metadata
+                data['date'] = datetime.now().strftime('%Y-%m-%d')
+                data['raw_message'] = raw_message
+                data.setdefault('symbol', 'UNKNOWN')
+                data.setdefault('instrument_type', 'Equity')
+                data.setdefault('trade_direction', 'Long')
+                
+                return data
+                
+            except json.JSONDecodeError as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️ JSON parse failed (attempt {attempt+1}), retrying...")
+                    continue
+                else:
+                    print(f"❌ Gemini JSON parse error: {e}")
+                    raise
+            except Exception as e:
+                print(f"❌ Gemini extraction error: {e}")
+                raise
+
 
 # ... RiskManager and TradingBot classes remain the same
 
