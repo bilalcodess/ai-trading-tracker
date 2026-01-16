@@ -127,8 +127,15 @@ class TradingBot:
         self.gemini = GeminiExtractor()
         self.risk_mgr = RiskManager()
         
-        self.application = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        # Build application WITHOUT job_queue (Python 3.13 compatibility)
+        self.application = (
+            Application.builder()
+            .token(Config.TELEGRAM_BOT_TOKEN)
+            .job_queue(None)
+            .build()
+        )
         
+        # Add handlers
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("daily", self.daily_command))
@@ -211,18 +218,22 @@ class TradingBot:
             return web.Response(status=500, text=str(e))
     
     async def run(self):
+        # Initialize application
         await self.application.initialize()
         await self.application.start()
         
+        # Set webhook
         webhook_url = os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:10000') + '/webhook'
         await self.application.bot.set_webhook(webhook_url)
         print(f"🌐 Webhook: {webhook_url}")
         
+        # Create web app
         app = web.Application()
         app.router.add_post('/webhook', self.handle_webhook)
         app.router.add_get('/', self.health_check)
         app.router.add_get('/health', self.health_check)
         
+        # Start server
         runner = web.AppRunner(app)
         await runner.setup()
         
@@ -233,6 +244,7 @@ class TradingBot:
         print(f"🚀 Running on port {port}")
         print("📱 Ready to receive updates!")
         
+        # Keep running
         await asyncio.Event().wait()
 
 if __name__ == "__main__":
